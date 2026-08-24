@@ -6,7 +6,6 @@ plugins {
 android {
     namespace = "com.arrbrants.kernelhack"
     compileSdk = 34
-    ndkPath = "/opt/android-ndk-r29"
 
     defaultConfig {
         applicationId = "com.arrbrants.kernelhack"
