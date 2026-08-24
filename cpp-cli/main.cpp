@@ -30,21 +30,28 @@ bool GetProcessTask(int pid, std::vector<int> & vOutput) {
 
 
 int main(int argc, char const *argv[]) {
+    // Usage: KernelHack [package_or_process_name] (default: com.proxima.dfm)
+    const char *target_name = (argc > 1) ? argv[1] : "com.proxima.dfm";
+
     c_driver driver;
-    
+
     //检查驱动是否成功对接
     if (!driver.is_ready()) {
         fprintf(stderr, "driver is not ready\n");
         return 1;
     }
-    
+
     //检查断点是否初始化，若没有初始化，则初始化
     if (!driver.bp_check_inited())
     {
         driver.bp_init_driver();
     }
-    
-    pid_t target_pid = driver.get_name_pid("com.proxima.dfm");
+
+    pid_t target_pid = driver.get_name_pid(target_name);
+    if (target_pid <= 0) {
+        fprintf(stderr, "process not found: %s\n", target_name);
+        return 1;
+    }
     driver.initialize(target_pid);
     uintptr_t UE4 = driver.get_module_base("libUE4.so");
     

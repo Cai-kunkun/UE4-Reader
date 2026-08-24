@@ -1,6 +1,7 @@
 package com.arrbrants.kernelhack
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -18,6 +19,9 @@ class MainActivity : Activity() {
     private lateinit var output: TextView
     private lateinit var scroll: ScrollView
     private lateinit var input: EditText
+
+    // Currently selected target process for exec (null = default)
+    private var targetProcess: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,9 +94,14 @@ class MainActivity : Activity() {
         }
 
         btnExec.setOnClickListener {
-            appendLine("\$ exec libexec.so")
+            val target = targetProcess
+            if (target != null) {
+                appendLine("\$ exec libexec.so $target")
+            } else {
+                appendLine("\$ exec libexec.so  [no target selected - binary default]")
+            }
             Thread {
-                execRoot(binaryPath(), emptyArray())
+                execRoot(binaryPath(), target?.let { arrayOf(it) } ?: emptyArray())
             }.start()
         }
 
@@ -138,7 +147,7 @@ class MainActivity : Activity() {
      * 1) pm list packages -3  -> third-party (user-installed) packages
      * 2) ps -A -o PID,USER,NAME -> all running processes
      * 3) intersect: keep processes whose package is in the user-app set
-     * System services / native daemons are excluded automatically.
+     * Then shows a popup to pick one as the exec target.
      */
     private fun listUserApps() {
         try {
@@ -155,8 +164,8 @@ class MainActivity : Activity() {
             // 2. running processes
             val psOut = runCapture("ps -A -o PID,USER,NAME")
 
-            // 3. intersect
-            var count = 0
+            // 3. intersect -> collect display items
+            val items = mutableListOf<Pair<String, String>>() // (displayText, packageName)
             val lines = psOut.lines()
             appendLine(lines[0]) // header
             for (i in 1 until lines.size) {
@@ -164,17 +173,37 @@ class MainActivity : Activity() {
                 if (line.isEmpty()) continue
                 val parts = line.split(Regex("\\s+"))
                 if (parts.size < 3) continue
-                // NAME may contain the package name; also handle "com.x:y" sub-processes
-                val name = parts.last().substringBefore(':')
+                // NAME may contain the package name; handle "com.x:y" sub-processes
+                val rawName = parts.last()
+                val name = rawName.substringBefore(':')
                 if (name in userPkgs) {
                     appendLine(line)
-                    count++
+                    items.add(Pair("${parts[0]}  $rawName", name))
                 }
             }
-            appendLine("[$count running user app process(es), ${userPkgs.size} installed]")
+            appendLine("[${items.size} running user app process(es), ${userPkgs.size} installed]")
+
+            if (items.isEmpty()) return
+            runOnUiThread { showProcessPicker(items) }
         } catch (e: Exception) {
             appendLine("[error] ${e.message}")
         }
+    }
+
+    /** Popup listing found processes; tapping one sets it as the exec target. */
+    private fun showProcessPicker(items: List<Pair<String, String>>) {
+        val displays = arrayOf("Cancel / keep current") + items.map { it.first }.toTypedArray()
+        val current = targetProcess?.let { "\ncurrent: $it" } ?: ""
+        AlertDialog.Builder(this)
+            .setTitle("Select process$current")
+            .setItems(displays) { _, which ->
+                if (which == 0) return@setItems
+                val (_, pkg) = items[which - 1]
+                targetProcess = pkg
+                appendLine("[target set -> $pkg]")
+                Toast.makeText(this, "target: $pkg", Toast.LENGTH_SHORT).show()
+            }
+            .show()
     }
 
     /** Run a command as root and return stdout+stderr text without touching the console UI. */
