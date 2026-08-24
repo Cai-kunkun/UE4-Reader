@@ -1,214 +1,205 @@
 package com.arrbrants.kernelhack
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.view.Gravity
-import android.widget.Button
-import android.widget.EditText
+import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import java.io.File
+import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.card.MaterialCardView
+import com.google.android.material.color.DynamicColors
+import com.google.android.material.color.MaterialColors
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
+import com.google.android.material.textview.MaterialTextView
 
 class MainActivity : Activity() {
-
     private lateinit var output: TextView
     private lateinit var scroll: ScrollView
-    private lateinit var input: EditText
-
-    // Currently selected target process for exec (null = default)
+    private lateinit var input: TextInputEditText
     private var targetProcess: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        DynamicColors.applyToActivityIfAvailable(this)
         super.onCreate(savedInstanceState)
 
-        val root = LinearLayout(this).apply {
+        val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(32, 32, 32, 32)
+            setBackgroundColor(MaterialColors.getColor(this@MainActivity, com.google.android.material.R.attr.colorSurface, Color.WHITE))
         }
 
-        // Status line
-        val status = TextView(this).apply {
-            text = "checking su..."
-            setPadding(0, 0, 0, 16)
+        val toolbar = MaterialToolbar(this).apply {
+            title = "KernelHack"
+            subtitle = "Root workspace"
+            setTitleTextAppearance(this@MainActivity, com.google.android.material.R.style.TextAppearance_Material3_TitleLarge)
+            elevation = 0f
         }
+        page.addView(toolbar, LinearLayout.LayoutParams(-1, dp(76)))
 
-        // Check SU button
-        val btnSu = Button(this).apply { text = "Check su" }
-        // List user apps button
-        val btnApps = Button(this).apply { text = "List user apps" }
-        // Exec self button
-        val btnExec = Button(this).apply { text = "Exec libexec.so" }
-
-        // Output console
-        scroll = ScrollView(this).apply { setBackgroundColor(Color.BLACK) }
-        output = TextView(this).apply {
-            typeface = Typeface.MONOSPACE
-            setTextColor(Color.GREEN)
-            text = ""
-            setPadding(16, 16, 16, 16)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(20))
         }
-        scroll.addView(output)
-        scroll.layoutParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
-        )
+        val contentScroll = ScrollView(this).apply { addView(content) }
+        page.addView(contentScroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        // Command input + run button row
-        input = EditText(this).apply {
-            hint = "shell command (runs as root)"
-            setSingleLine(true)
-            typeface = Typeface.MONOSPACE
+        val statusCard = MaterialCardView(this).apply {
+            radius = dp(24).toFloat()
+            strokeWidth = dp(1)
+            setCardBackgroundColor(MaterialColors.getColor(this@MainActivity, com.google.android.material.R.attr.colorPrimaryContainer, Color.LTGRAY))
+            setContentPadding(dp(18), dp(18), dp(18), dp(18))
         }
-        val btnRun = Button(this).apply { text = "Run" }
-        val row = LinearLayout(this).apply {
+        val status = MaterialTextView(this).apply {
+            text = "Checking root access..."
+            setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_TitleMedium)
+        }
+        statusCard.addView(status)
+        content.addView(statusCard, LinearLayout.LayoutParams(-1, dp(82)).apply { bottomMargin = dp(16) })
+
+        val actionRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(input, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(btnRun)
         }
+        val btnSu = actionButton("Check su", true)
+        val btnApps = actionButton("User apps", false)
+        actionRow.addView(btnSu, LinearLayout.LayoutParams(0, dp(56), 1f).apply { rightMargin = dp(8) })
+        actionRow.addView(btnApps, LinearLayout.LayoutParams(0, dp(56), 1f))
+        content.addView(actionRow, LinearLayout.LayoutParams(-1, dp(64)).apply { bottomMargin = dp(8) })
 
-        root.addView(status)
-        root.addView(btnSu)
-        root.addView(btnApps)
-        root.addView(btnExec)
-        root.addView(scroll)
-        root.addView(row)
-        setContentView(root)
+        val btnExec = actionButton("Execute target", true).apply { icon = null }
+        content.addView(btnExec, LinearLayout.LayoutParams(-1, dp(56)).apply { bottomMargin = dp(16) })
+
+        val consoleCard = MaterialCardView(this).apply {
+            radius = dp(20).toFloat()
+            setCardBackgroundColor(Color.rgb(20, 22, 25))
+            setContentPadding(0, 0, 0, 0)
+        }
+        scroll = ScrollView(this)
+        output = TextView(this).apply {
+            typeface = Typeface.MONOSPACE
+            textSize = 12f
+            setTextColor(Color.rgb(178, 240, 190))
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            text = "Ready. Check root access to begin.\n"
+        }
+        scroll.addView(output)
+        consoleCard.addView(scroll, ViewGroup.LayoutParams(-1, dp(230)))
+        content.addView(consoleCard, LinearLayout.LayoutParams(-1, dp(230)).apply { bottomMargin = dp(16) })
+
+        val commandLayout = TextInputLayout(this).apply {
+            hint = "Root command"
+            setBoxCornerRadii(dp(18).toFloat(), dp(18).toFloat(), dp(18).toFloat(), dp(18).toFloat())
+            endIconMode = TextInputLayout.END_ICON_NONE
+        }
+        input = TextInputEditText(this).apply {
+            setSingleLine(true)
+            typeface = Typeface.MONOSPACE
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND
+        }
+        commandLayout.addView(input)
+        val run = MaterialButton(this).apply {
+            text = "Run command"
+            cornerRadius = dp(18)
+        }
+        content.addView(commandLayout, LinearLayout.LayoutParams(-1, dp(64)).apply { bottomMargin = dp(8) })
+        content.addView(run, LinearLayout.LayoutParams(-1, dp(52)))
+
+        setContentView(page)
 
         btnSu.setOnClickListener {
             Thread {
                 val ok = checkSu()
                 runOnUiThread {
-                    status.text = if (ok) "su: AVAILABLE" else "su: NOT AVAILABLE"
-                    Toast.makeText(
-                        this,
-                        if (ok) "root granted" else "no root",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    status.text = if (ok) "Root access available" else "Root access unavailable"
+                    Toast.makeText(this, if (ok) "su granted" else "su unavailable", Toast.LENGTH_SHORT).show()
                 }
             }.start()
         }
-
-        btnExec.setOnClickListener {
-            val target = targetProcess
-            if (target != null) {
-                appendLine("\$ exec libexec.so $target")
-            } else {
-                appendLine("\$ exec libexec.so  [no target selected - binary default]")
-            }
-            Thread {
-                execRoot(binaryPath(), target?.let { arrayOf(it) } ?: emptyArray())
-            }.start()
-        }
-
         btnApps.setOnClickListener {
-            appendLine("\$ list user apps (running)")
+            appendLine("\\$ list user apps (running)")
             Thread { listUserApps() }.start()
         }
-
-        btnRun.setOnClickListener {
-            val cmd = input.text.toString().trim()
+        btnExec.setOnClickListener {
+            val target = targetProcess
+            appendLine("\\$ execute libexec.so ${target ?: "(default target)"}")
+            Thread { execRoot(binaryPath(), target?.let { arrayOf(it) } ?: emptyArray()) }.start()
+        }
+        run.setOnClickListener {
+            val cmd = input.text?.toString()?.trim().orEmpty()
             if (cmd.isEmpty()) return@setOnClickListener
-            input.text.clear()
-            appendLine("\$ $cmd")
+            input.text?.clear()
+            appendLine("\\$ $cmd")
             Thread { execRoot("sh", arrayOf("-c", cmd)) }.start()
         }
-
-        // Auto check on launch
         Thread {
             val ok = checkSu()
-            runOnUiThread {
-                status.text = if (ok) "su: AVAILABLE" else "su: NOT AVAILABLE"
-            }
+            runOnUiThread { status.text = if (ok) "Root access available" else "Root access unavailable" }
         }.start()
     }
 
-    private fun binaryPath(): String {
-        // jniLibs packaged libexec.so lands here with exec permission
-        return applicationInfo.nativeLibraryDir + "/libexec.so"
-    }
-
-    private fun checkSu(): Boolean {
-        return try {
-            val p = ProcessBuilder("su", "-c", "id").start()
-            p.waitFor()
-            p.inputStream.bufferedReader().readText().contains("uid=0")
-        } catch (e: Exception) {
-            false
+    private fun actionButton(label: String, filled: Boolean): MaterialButton = MaterialButton(this).apply {
+        text = label
+        cornerRadius = dp(18)
+        if (!filled) {
+            setBackgroundColor(Color.TRANSPARENT)
+            strokeWidth = dp(1)
         }
     }
 
-    /**
-     * Lists running user apps only:
-     * 1) pm list packages -3  -> third-party (user-installed) packages
-     * 2) ps -A -o PID,USER,NAME -> all running processes
-     * 3) intersect: keep processes whose package is in the user-app set
-     * Then shows a popup to pick one as the exec target.
-     */
+    private fun binaryPath() = applicationInfo.nativeLibraryDir + "/libexec.so"
+
+    private fun checkSu(): Boolean = try {
+        val p = ProcessBuilder("su", "-c", "id").start()
+        val result = p.inputStream.bufferedReader().readText()
+        p.waitFor()
+        result.contains("uid=0")
+    } catch (_: Exception) { false }
+
     private fun listUserApps() {
         try {
-            // 1. user-installed packages
-            val pkgOut = runCapture("pm list packages -3")
-            val userPkgs = pkgOut.lineSequence()
-                .mapNotNull { it.removePrefix("package:").trim().takeIf { n -> n.isNotEmpty() } }
-                .toHashSet()
-            if (userPkgs.isEmpty()) {
-                appendLine("[no user packages found]")
-                return
-            }
-
-            // 2. running processes
-            val psOut = runCapture("ps -A -o PID,USER,NAME")
-
-            // 3. intersect -> collect display items
-            val items = mutableListOf<Pair<String, String>>() // (displayText, packageName)
-            val lines = psOut.lines()
-            appendLine(lines[0]) // header
-            for (i in 1 until lines.size) {
-                val line = lines[i].trim()
-                if (line.isEmpty()) continue
+            val packages = runCapture("pm list packages -3").lineSequence()
+                .mapNotNull { it.removePrefix("package:").trim().takeIf(String::isNotEmpty) }.toHashSet()
+            val items = mutableListOf<Pair<String, String>>()
+            val lines = runCapture("ps -A -o PID,USER,NAME").lines()
+            appendLine(lines.firstOrNull().orEmpty())
+            lines.drop(1).forEach { raw ->
+                val line = raw.trim()
                 val parts = line.split(Regex("\\s+"))
-                if (parts.size < 3) continue
-                // NAME may contain the package name; handle "com.x:y" sub-processes
-                val rawName = parts.last()
-                val name = rawName.substringBefore(':')
-                if (name in userPkgs) {
+                if (parts.size < 3) return@forEach
+                val process = parts.last()
+                val packageName = process.substringBefore(':')
+                if (packageName in packages) {
                     appendLine(line)
-                    items.add(Pair("${parts[0]}  $rawName", name))
+                    items += "${parts[0]}  $process" to packageName
                 }
             }
-            appendLine("[${items.size} running user app process(es), ${userPkgs.size} installed]")
-
-            if (items.isEmpty()) return
-            runOnUiThread { showProcessPicker(items) }
-        } catch (e: Exception) {
-            appendLine("[error] ${e.message}")
-        }
+            appendLine("[${items.size} running user processes, ${packages.size} installed]")
+            if (items.isNotEmpty()) runOnUiThread { showProcessPicker(items) }
+        } catch (e: Exception) { appendLine("[error] ${e.message}") }
     }
 
-    /** Popup listing found processes; tapping one sets it as the exec target. */
     private fun showProcessPicker(items: List<Pair<String, String>>) {
-        val displays = arrayOf("Cancel / keep current") + items.map { it.first }.toTypedArray()
-        val current = targetProcess?.let { "\ncurrent: $it" } ?: ""
-        AlertDialog.Builder(this)
-            .setTitle("Select process$current")
-            .setItems(displays) { _, which ->
+        val labels = arrayOf("Cancel / keep current") + items.map { it.first }.toTypedArray()
+        val current = targetProcess?.let { "\nCurrent: $it" } ?: ""
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Select target process$current")
+            .setItems(labels) { _, which ->
                 if (which == 0) return@setItems
-                val (_, pkg) = items[which - 1]
-                targetProcess = pkg
-                appendLine("[target set -> $pkg]")
-                Toast.makeText(this, "target: $pkg", Toast.LENGTH_SHORT).show()
-            }
-            .show()
+                targetProcess = items[which - 1].second
+                appendLine("[target set -> $targetProcess]")
+                Toast.makeText(this, "Target selected", Toast.LENGTH_SHORT).show()
+            }.show()
     }
 
-    /** Run a command as root and return stdout+stderr text without touching the console UI. */
-    private fun runCapture(cmd: String): String {
-        val p = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+    private fun runCapture(command: String): String {
+        val p = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
         p.outputStream.close()
         val out = p.inputStream.bufferedReader().readText()
         val err = p.errorStream.bufferedReader().readText()
@@ -218,32 +209,22 @@ class MainActivity : Activity() {
 
     private fun execRoot(cmd: String, args: Array<String>) {
         try {
-            // Wrap in su -c so everything runs as root
-            val full = mutableListOf("su", "-c", (listOf(cmd) + args).joinToString(" "))
-            val p = Runtime.getRuntime().exec(full.toTypedArray())
-
-            // Close stdin immediately: the binary is non-interactive now
+            val command = (listOf(cmd) + args).joinToString(" ")
+            val p = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
             p.outputStream.close()
-
-            val outThread = Thread {
-                p.inputStream.bufferedReader().forEachLine { appendLine(it) }
-            }
-            val errThread = Thread {
-                p.errorStream.bufferedReader().forEachLine { appendLine("[err] $it") }
-            }
-            outThread.start(); errThread.start()
-            p.waitFor()
-            outThread.join(); errThread.join()
+            val out = Thread { p.inputStream.bufferedReader().forEachLine { appendLine(it) } }
+            val err = Thread { p.errorStream.bufferedReader().forEachLine { appendLine("[err] $it") } }
+            out.start(); err.start(); p.waitFor(); out.join(); err.join()
             appendLine("[exit ${p.exitValue()}]")
-        } catch (e: Exception) {
-            appendLine("[error] ${e.message}")
-        }
+        } catch (e: Exception) { appendLine("[error] ${e.message}") }
     }
 
     private fun appendLine(line: String) {
         runOnUiThread {
-            output.append(line + "\n")
+            output.append("$line\n")
             scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
         }
     }
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 }
