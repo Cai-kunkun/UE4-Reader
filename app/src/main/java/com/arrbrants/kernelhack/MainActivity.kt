@@ -36,6 +36,8 @@ class MainActivity : Activity() {
 
         // Check SU button
         val btnSu = Button(this).apply { text = "Check su" }
+        // List user apps button
+        val btnApps = Button(this).apply { text = "List user apps" }
         // Exec self button — shows mode selector first
         val btnExec = Button(this).apply { text = "Exec libexec.so" }
 
@@ -68,6 +70,7 @@ class MainActivity : Activity() {
 
         root.addView(status)
         root.addView(btnSu)
+        root.addView(btnApps)
         root.addView(btnExec)
         root.addView(scroll)
         root.addView(row)
@@ -88,6 +91,11 @@ class MainActivity : Activity() {
         }
 
         btnExec.setOnClickListener { showExecModeDialog() }
+
+        btnApps.setOnClickListener {
+            appendLine("\$ list user apps (running)")
+            Thread { listUserApps() }.start()
+        }
 
         btnRun.setOnClickListener {
             val cmd = input.text.toString().trim()
@@ -155,6 +163,60 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
             false
         }
+    }
+
+    /**
+     * Lists running user apps only:
+     * 1) pm list packages -3  -> third-party (user-installed) packages
+     * 2) ps -A -o PID,USER,NAME -> all running processes
+     * 3) intersect: keep processes whose package is in the user-app set
+     * System services / native daemons are excluded automatically.
+     */
+    private fun listUserApps() {
+        try {
+            // 1. user-installed packages
+            val pkgOut = runCapture("pm list packages -3")
+            val userPkgs = pkgOut.lineSequence()
+                .mapNotNull { it.removePrefix("package:").trim().takeIf { n -> n.isNotEmpty() } }
+                .toHashSet()
+            if (userPkgs.isEmpty()) {
+                appendLine("[no user packages found]")
+                return
+            }
+
+            // 2. running processes
+            val psOut = runCapture("ps -A -o PID,USER,NAME")
+
+            // 3. intersect
+            var count = 0
+            val lines = psOut.lines()
+            appendLine(lines[0]) // header
+            for (i in 1 until lines.size) {
+                val line = lines[i].trim()
+                if (line.isEmpty()) continue
+                val parts = line.split(Regex("\\s+"))
+                if (parts.size < 3) continue
+                // NAME may contain the package name; also handle "com.x:y" sub-processes
+                val name = parts.last().substringBefore(':')
+                if (name in userPkgs) {
+                    appendLine(line)
+                    count++
+                }
+            }
+            appendLine("[$count running user app process(es), ${userPkgs.size} installed]")
+        } catch (e: Exception) {
+            appendLine("[error] ${e.message}")
+        }
+    }
+
+    /** Run a command as root and return stdout+stderr text without touching the console UI. */
+    private fun runCapture(cmd: String): String {
+        val p = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+        p.outputStream.close()
+        val out = p.inputStream.bufferedReader().readText()
+        val err = p.errorStream.bufferedReader().readText()
+        p.waitFor()
+        return out + err
     }
 
     private fun execRoot(cmd: String, args: Array<String>, extraStdin: String = "") {
