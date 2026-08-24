@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">KernelHack</string>
+    <string name="hello">KernelHack base app\n\nNative binary: libexec.so (run as root via su)</string>
+</resources>
