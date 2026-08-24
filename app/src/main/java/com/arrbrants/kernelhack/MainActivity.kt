@@ -1,7 +1,6 @@
 package com.arrbrants.kernelhack
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -38,7 +37,7 @@ class MainActivity : Activity() {
         val btnSu = Button(this).apply { text = "Check su" }
         // List user apps button
         val btnApps = Button(this).apply { text = "List user apps" }
-        // Exec self button — shows mode selector first
+        // Exec self button
         val btnExec = Button(this).apply { text = "Exec libexec.so" }
 
         // Output console
@@ -90,7 +89,12 @@ class MainActivity : Activity() {
             }.start()
         }
 
-        btnExec.setOnClickListener { showExecModeDialog() }
+        btnExec.setOnClickListener {
+            appendLine("\$ exec libexec.so")
+            Thread {
+                execRoot(binaryPath(), emptyArray())
+            }.start()
+        }
 
         btnApps.setOnClickListener {
             appendLine("\$ list user apps (running)")
@@ -117,42 +121,6 @@ class MainActivity : Activity() {
     private fun binaryPath(): String {
         // jniLibs packaged libexec.so lands here with exec permission
         return applicationInfo.nativeLibraryDir + "/libexec.so"
-    }
-
-    /**
-     * libexec.so (c_driver ctor) reads TWO numbers from stdin:
-     *   1) gyro:     0=tracepoint 1=uprobe 2=skip
-     *   2) touch:    0=mode0 1=mode1 2=skip
-     * Presets map to "<gyro>\n<touch>\n" piped into su stdin before the shell runs the binary.
-     */
-    private fun showExecModeDialog() {
-        val presets = arrayOf(
-            "Gyro: tracepoint + Touch: mode 0", // 0\n0
-            "Gyro: tracepoint + Touch: mode 1", // 0\n1
-            "Gyro: uprobe + Touch: mode 0", // 1\n0
-            "Gyro: uprobe + Touch: mode 1" // 1\n1
-        )
-        val codes = arrayOf("0\n0", "0\n1", "1\n0", "1\n1")
-
-        AlertDialog.Builder(this)
-            .setTitle("Exec modes (gyro / touch)")
-            .setItems(presets) { _, which ->
-                appendLine("\$ exec libexec.so [gyro=${codes[which][0]} touch=${codes[which][2]}]")
-                Thread {
-                    execRoot(
-                        binaryPath(),
-                        emptyArray(),
-                        extraStdin = codes[which] + "\n"
-                    )
-                }.start()
-            }
-            .setNeutralButton("Skip both (2/2)") { _, _ ->
-                appendLine("\$ exec libexec.so [gyro=skip touch=skip]")
-                Thread {
-                    execRoot(binaryPath(), emptyArray(), extraStdin = "2\n2\n")
-                }.start()
-            }
-            .show()
     }
 
     private fun checkSu(): Boolean {
@@ -219,14 +187,14 @@ class MainActivity : Activity() {
         return out + err
     }
 
-    private fun execRoot(cmd: String, args: Array<String>, extraStdin: String = "") {
+    private fun execRoot(cmd: String, args: Array<String>) {
         try {
             // Wrap in su -c so everything runs as root
             val full = mutableListOf("su", "-c", (listOf(cmd) + args).joinToString(" "))
             val p = Runtime.getRuntime().exec(full.toTypedArray())
 
-            // Feed preset answers (gyro/touch selection) into stdin, then close
-            p.outputStream.use { it.write(extraStdin.toByteArray()) }
+            // Close stdin immediately: the binary is non-interactive now
+            p.outputStream.close()
 
             val outThread = Thread {
                 p.inputStream.bufferedReader().forEachLine { appendLine(it) }

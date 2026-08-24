@@ -12,8 +12,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <linux/input.h>
-#include <linux/uinput.h>
 #include <signal.h>
 #include <initializer_list>
 #include <utility>
@@ -32,8 +30,6 @@
 #include <pthread.h>
 #include <thread>
 #include <unistd.h>
-#include <linux/input.h>
-#include <linux/uinput.h>
 #include <signal.h>
 #include <vector>
 #include <unordered_map>
@@ -64,11 +60,6 @@
 #define READ_MEM        _IOW(TWT_MARK, 4, _request)
 #define READ_MEM_V2     _IOW(TWT_MARK, 11, _request)
 #define WRITE_MEM       _IOW(TWT_MARK, 5, _request)
-#define TOUCH_INIT      _IOW(TWT_MARK, 6, touch_event_base)
-#define TOUCH_DOWN      _IOW(TWT_MARK, 7, touch_event_base)
-#define TOUCH_UP        _IOW(TWT_MARK, 8, touch_event_base)
-#define GYRO_INIT       _IOW(TWT_MARK, 9, int)
-#define GYRO_CONFIG     _IOWR(TWT_MARK, 10, gyro_config)
 
 #define BP_INIT_CMD        _IO(TWT_MARK, 19)
 #define BP_CHECK_INITED    _IO(TWT_MARK, 30)
@@ -243,19 +234,6 @@ private:
         size_t size;
     } request, *Prequest;
 
-    typedef struct _touch_event_base
-    {
-        int slot;
-        int x;
-        int y;
-    } touch_event_base, *Ptouch_event_base;
-
-    typedef struct gyro_config {
-        uint32_t enable;
-        uint32_t x;
-        uint32_t y;
-    } gyro_config, *Pgyro_config;
-
     __attribute__((visibility("hidden"))) int getFd(const char *str)
     {
         DIR *dir;
@@ -309,38 +287,6 @@ public:
             exit(0);
         } else {
             printf("驱动对接成功\n");
-        }
-
-        int choice = -1;
-
-        printf("\n===== 陀螺仪初始化 =====\n");
-        printf("0: tracepoint 方式\n");
-        printf("1: uprobe 方式\n");
-        printf("2: 不启用陀螺仪\n");
-        printf("请选择: ");
-        scanf("%d", &choice);
-        if (choice >= 0 && choice <= 1) {
-            if (gyro_init(choice))
-                printf("陀螺仪初始化成功 (模式 %d)\n", choice);
-            else
-                printf("陀螺仪初始化失败\n");
-        } else {
-            printf("跳过陀螺仪初始化\n");
-        }
-
-        printf("\n===== 触摸初始化 =====\n");
-        printf("0: 触摸模式 0\n");
-        printf("1: 触摸模式 1\n");
-        printf("2: 不启用触摸\n");
-        printf("请选择: ");
-        scanf("%d", &choice);
-        if (choice >= 0 && choice <= 1) {
-            if (touch_init(choice))
-                printf("触摸初始化成功 (模式 %d)\n", choice);
-            else
-                printf("触摸初始化失败\n");
-        } else {
-            printf("跳过触摸初始化\n");
         }
     }
 
@@ -503,116 +449,6 @@ public:
             return 0;
         }
         return req.addr;
-    }
-
-    bool touch_init(int touch_mode)
-    {
-        touch_event_base teb = {};
-        if (fd < 0)
-            return false;
-        if (touch_mode > 1 || touch_mode < 0) {
-            printf("不支持的触摸模式\n");
-            return false;
-        }
-        teb.slot = touch_mode;
-        if (ioctl(fd, TOUCH_INIT, &teb) != 0)
-        {
-            if (errno == EALREADY) {
-                printf("触摸已开启，当前模式: %d\n", teb.slot);
-                return true;
-            }
-            return false;
-        }
-        return true;
-    }
-
-    bool touch_down(int slot, int x, int y)
-    {
-        touch_event_base teb = {};
-        if (fd < 0 || slot < 0)
-            return false;
-
-        teb.slot = slot;
-        teb.x = x;
-        teb.y = y;
-        
-        if (ioctl(fd, TOUCH_DOWN, &teb) != 0)
-        {
-            return false;
-        }
-        return true;
-    }
-
-    bool touch_up(int slot)
-    {
-        touch_event_base teb = {};
-        if (fd < 0 || slot < 0)
-            return false;
-
-        teb.slot = slot;
-        teb.x = 0;
-        teb.y = 0;
-
-        if (ioctl(fd, TOUCH_UP, &teb) != 0)
-        {
-            return false;
-        }
-        return true;
-    }
-
-    bool gyro_init(int method)
-    {
-        int current_method = method;
-        if (fd < 0)
-            return false;
-        if (method < 0 || method > 1) {
-            printf("不支持的陀螺仪模式\n");
-            return false;
-        }
-        if (ioctl(fd, GYRO_INIT, &current_method) != 0)
-        {
-            if (errno == EALREADY) {
-                printf("陀螺仪已开启，当前模式: %d\n", current_method);
-                return true;
-            }
-            return false;
-        }
-        return true;
-    }
-
-    bool gyro_modify(float x, float y)
-    {
-        gyro_config config = {};
-        if (fd < 0)
-            return false;
-
-        config.enable = 1;
-        memcpy(&config.x, &x, sizeof(uint32_t));
-        memcpy(&config.y, &y, sizeof(uint32_t));
-
-        if (ioctl(fd, GYRO_CONFIG, &config) != 0)
-        {
-            return false;
-        }
-        
-        return true;
-    }
-
-    bool gyro_disable()
-    {
-        gyro_config config = {};
-        if (fd < 0)
-            return false;
-
-        config.enable = 0;
-        config.x = 0;
-        config.y = 0;
-
-        if (ioctl(fd, GYRO_CONFIG, &config) != 0)
-        {
-            return false;
-        }
-        return true;
     }
 
     bool bp_check_inited()
