@@ -2,6 +2,7 @@ package com.arrbrants.kernelhack
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.nio.charset.StandardCharsets
 import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
@@ -83,7 +84,7 @@ class McpServer(
                     respond(output, 431, JSONObject().put("error", "headers too large"))
                     return
                 }
-                val headerLines = headerBytes.toString(Charsets.ISO_8859_1.name()).split("\r\n")
+                val headerLines = headerBytes.toString(StandardCharsets.ISO_8859_1.name()).split("\r\n")
                 val requestLine = headerLines.firstOrNull() ?: return
                 val headers = headerLines.drop(1).mapNotNull { line ->
                     val separator = line.indexOf(':')
@@ -106,7 +107,7 @@ class McpServer(
                     if (count < 0) return
                     read += count
                 }
-                val response = process(JSONObject(String(body, Charsets.UTF_8)))
+                val response = process(JSONObject(String(body, StandardCharsets.UTF_8)))
                 respond(output, 200, response)
             }
         } catch (e: Exception) {
@@ -141,11 +142,18 @@ class McpServer(
         if (params.optString("name") != "run_ue4_reader") {
             return error(id, -32602, "Unknown tool")
         }
-        val target = params.optJSONObject("arguments")?.optString("package")?.trim().orEmpty()
+        val args = params.optJSONObject("arguments") ?: JSONObject()
+        val target = args.optString("package")?.trim().orEmpty()
         if (!target.matches(Regex("[A-Za-z0-9_.]+"))) {
             return error(id, -32602, "package must be an Android package name")
         }
-        val result = executor(target)
+        val command = args.optString("command", "info")
+        val module = args.optString("module", "")
+        val address = args.optString("address", "")
+        val size = args.optInt("size", 0)
+        
+        val execArgs = buildArgs(target, command, module, address, size)
+        val result = executor(execArgs)
         val text = buildString {
             append("exitCode: ").append(result.exitCode).append('\n')
             append("stdout:\n").append(result.stdout)
@@ -157,24 +165,51 @@ class McpServer(
             .put("isError", result.exitCode != 0))
     }
 
-    private fun toolDefinition() = JSONObject()
-        .put("name", "run_ue4_reader")
-        .put("description", "Run the packaged KernelHack ELF as root for one selected Android package and return its output.")
-        .put("inputSchema", JSONObject()
-            .put("type", "object")
-            .put("properties", JSONObject().put("package", JSONObject().put("type", "string").put("description", "Target Android package name")))
-            .put("required", JSONArray().put("package")))
+    private fun buildArgs(target: String, command: String, module: String, address: String, size: Int): String {
+        val sb = StringBuilder(target)
+        if (command != "info") {
+            sb.append(' ').append(command)
+        }
+        when (command) {
+            "module" -> if (module.isNotEmpty()) sb.append(' ').append(module)
+            "read" -> {
+                if (address.isNotEmpty()) sb.append(' ').append(address)
+                if (size > 0) sb.append(' ').append(size)
+            }
+        }
+        return sb.toString()
+    }
 
-    private fun result(id: Any?, value: JSONObject) = JSONObject().put("jsonrpc", "2.0").put("id", id).put("result", value)
+    private fun toolDefinition(): JSONObject {
+        val props = JSONObject()
+        props.put("package", JSONObject().put("type", "string").put("description", "Target Android package name"))
+        props.put("command", JSONObject()
+            .put("type", "string")
+            .put("description", "Command: info (default), modules, module, read")
+            .put("enum", JSONArray().put("info").put("modules").put("module").put("read")))
+        props.put("module", JSONObject().put("type", "string").put("description", "Module name for 'module' command"))
+        props.put("address", JSONObject().put("type", "string").put("description", "Hex address for 'read' command"))
+        props.put("size", JSONObject().put("type", "integer").put("description", "Size in bytes for 'read' command"))
 
-    private fun error(id: Any?, code: Int, message: String) = JSONObject()
+        return JSONObject()
+            .put("name", "run_ue4_reader")
+            .put("description", "Run the packaged KernelHack ELF as root for one selected Android package and return its output.")
+            .put("inputSchema", JSONObject()
+                .put("type", "object")
+                .put("properties", props)
+                .put("required", JSONArray().put("package")))
+    }
+
+    private fun result(id: Any?, value: JSONObject): JSONObject = JSONObject().put("jsonrpc", "2.0").put("id", id).put("result", value)
+
+    private fun error(id: Any?, code: Int, message: String): JSONObject = JSONObject()
         .put("jsonrpc", "2.0").put("id", id)
         .put("error", JSONObject().put("code", code).put("message", message))
 
     private fun respond(output: OutputStream, status: Int, body: JSONObject) {
-        val payload = body.toString().toByteArray(Charsets.UTF_8)
+        val payload = body.toString().toByteArray(StandardCharsets.UTF_8)
         val reason = if (status == 200) "OK" else "Error"
-        output.write("HTTP/1.1 $status $reason\r\nContent-Type: application/json\r\nContent-Length: ${payload.size}\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
+        output.write("HTTP/1.1 $status $reason\r\nContent-Type: application/json\r\nContent-Length: ${payload.size}\r\nConnection: close\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
         output.write(payload)
         output.flush()
     }
