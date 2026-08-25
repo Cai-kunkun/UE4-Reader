@@ -72,7 +72,8 @@ static void print_usage() {
         "  modules              列出目标进程加载的所有模块 (list loaded modules)\n"
         "  module <name>        打印指定模块的 base/bss (module base + bss)\n"
         "  read <hexaddr> <size> 读取指定地址的原始字节，以十六进制打印 (raw memory read)\n"
-        "  write <hexaddr> <hexdata> 向指定地址写入原始字节 (raw memory write)\n");
+          "  write <hexaddr> <hexdata> 向指定地址写入原始字节 (raw memory write)\n"
+        "  scan <type> <value> [module] 按类型搜索内存值 (float/double/int/long/short/byte), 可选限定模块内\n");
 }
 
 int main(int argc, char const *argv[]) {
@@ -178,6 +179,86 @@ int main(int argc, char const *argv[]) {
         printf("wrote: %zu\n", buf.size());
         printf("ok: %s\n", ok ? "true" : "false");
         return ok ? 0 : 1;
+    }
+
+    if (strcmp(command, "scan") == 0) {
+        if (argc < 4) {
+            fprintf(stderr, "usage: KernelHack <package> scan <type> <value> [module]\n");
+            fprintf(stderr, "  type: float double int long short byte\n");
+            return 1;
+        }
+        const char *type = argv[3];
+        std::string valstr = argv[4];
+        std::string modFilter = (argc > 5) ? argv[5] : "";
+
+        // 解析目标值为字节序列
+        std::vector<uint8_t> pattern;
+        size_t psize = 0;
+        if (!strcmp(type,"float")) { float v=std::stof(valstr); psize=4; pattern.resize(4); memcpy(pattern.data(),&v,4); }
+        else if (!strcmp(type,"double")) { double v=std::stod(valstr); psize=8; pattern.resize(8); memcpy(pattern.data(),&v,8); }
+        else if (!strcmp(type,"int")) { int32_t v=std::stoi(valstr); psize=4; pattern.resize(4); memcpy(pattern.data(),&v,4); }
+        else if (!strcmp(type,"long")) { int64_t v=std::stoll(valstr); psize=8; pattern.resize(8); memcpy(pattern.data(),&v,8); }
+        else if (!strcmp(type,"short")) { int16_t v=(int16_t)std::stoi(valstr); psize=2; pattern.resize(2); memcpy(pattern.data(),&v,2); }
+        else if (!strcmp(type,"byte")) { uint8_t v=(uint8_t)strtoul(valstr.c_str(),nullptr,0); psize=1; pattern.resize(1); memcpy(pattern.data(),&v,1); }
+        else { fprintf(stderr,"unknown type: %s\n",type); return 1; }
+
+        // 读 maps 收集可读区域（可选过滤模块）
+        char mapspath[64];
+        snprintf(mapspath,sizeof(mapspath),"/proc/%d/maps",target_pid);
+        FILE *fp=fopen(mapspath,"r");
+        if(!fp){ fprintf(stderr,"cannot open maps\n"); return 1; }
+        struct Region{ uintptr_t start,end; };
+        std::vector<Region> regions;
+        std::map<std::string,uintptr_t> modBase;
+        char line[1024];
+        while(fgets(line,sizeof(line),fp)){
+            uintptr_t s,e; char pathBuf[768]={0};
+            if(sscanf(line,"%lx-%lx %*4s %*x %*x:%*x %*d %767[^\n]",&s,&e,pathBuf)<3) continue;
+            // perms 是第3个字段 (如 rw-p), 判断可读: 找到第二个空格后的字符
+            char perms[8]={0};
+            sscanf(line,"%*x-%*x %7s",perms);
+            bool readable = perms[0]=='r';
+            if(!readable) continue;
+            if(pathBuf[0]!='[' && pathBuf[0]!='/') continue;
+            if(strstr(pathBuf,"[vvar")||strstr(pathBuf,"[vdso")||strstr(pathBuf,"[vsyscall")) continue;
+            if(!modFilter.empty() && !strstr(pathBuf,modFilter.c_str())) continue;
+            // 跳过超大匿名区上限保护(>512MB)防止扫描过久
+            if(modFilter.empty() && pathBuf[0]=='[' && (e-s) > (512UL<<20)) continue;
+            regions.push_back({s,e});
+        }
+        fclose(fp);
+
+        printf("pid: %d\n",target_pid);
+        printf("type: %s value: %s regions: %zu\n",type,valstr.c_str(),regions.size());
+
+        // 扫描：每区域分块读入并比对
+        const size_t CHUNK = 1<<20; // 1MB
+        int hits=0; const int MAXHITS=200;
+        for(auto &r:regions){
+            if(r.end<=r.start) continue;
+            uintptr_t addr=r.start;
+            while(addr+psize<=r.end && hits<MAXHITS){
+                size_t want=CHUNK;
+                if(addr+want>r.end) want=r.end-addr;
+                std::vector<uint8_t> buf(want);
+                if(driver.read_v2(addr,buf.data(),want)){
+                    for(size_t i=0;i+psize<=want;i++){
+                        if(memcmp(buf.data()+i,pattern.data(),psize)==0){
+                            uintptr_t hitAddr=addr+i;
+                            printf("hit: %lx",hitAddr);
+                            if(!modFilter.empty()) printf(" (%s)",modFilter.c_str());
+                            printf("\n");
+                            hits++;
+                            if(hits>=MAXHITS) break;
+                        }
+                    }
+                }
+                addr+=want;
+            }
+            if(hits>=MAXHITS){ printf("[truncated at %d hits]\n",MAXHITS); break; }
+        }
+        printf("[%d hits]\n",hits);
+        return 0;
     }
 
     if (strcmp(command, "info") != 0) {

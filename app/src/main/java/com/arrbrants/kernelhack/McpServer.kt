@@ -165,6 +165,18 @@ class McpServer(
                     return error(id, -32602, "size must be 1..4096")
                 "$pkg read ${addr.lowercase()} $size"
             }
+            "reader_scan" -> {
+                val type = args.optString("type")?.trim().orEmpty()
+                val value = args.optString("value")?.trim().orEmpty()
+                val mod = args.optString("module")?.trim().orEmpty()
+                if (!type.matches(Regex("(float|double|int|long|short|byte)")))
+                    return error(id, -32602, "type must be float/double/int/long/short/byte")
+                if (value.isEmpty() || !value.matches(Regex("[\\-0-9.eE+xXa-fA-F]+")))
+                    return error(id, -32602, "invalid value")
+                if (mod.isNotEmpty() && !mod.matches(Regex("[A-Za-z0-9_.:+\\-]+")))
+                    return error(id, -32602, "invalid module name")
+                if (mod.isNotEmpty()) "$pkg scan $type $value $mod" else "$pkg scan $type $value"
+            }
             "writer_write" -> {
                 val addr = args.optString("address")?.trim().orEmpty()
                 val data = args.optString("hexdata")?.trim().orEmpty()
@@ -259,6 +271,18 @@ class McpServer(
         tools.put(JSONObject()
             .put("name", "writer_write")
             .put("description", "DANGEROUS: write raw bytes into target process memory. Use only when you know exactly what you are doing.")
+            .put("inputSchema", schema))
+
+        // 6. scan
+        schema = base("type")
+        schema.getJSONObject("properties").apply {
+            put("type", JSONObject().put("type", "string").put("description", "Value type: float, double, int, long, short, byte").put("enum", JSONArray().put("float").put("double").put("int").put("long").put("short").put("byte")))
+            put("value", JSONObject().put("type", "string").put("description", "Value to search for (as string, e.g. 3.14, 42)"))
+            put("module", JSONObject().put("type", "string").put("description", "Optional: limit search to this module (e.g. libUE4.so)"))
+        }
+        tools.put(JSONObject()
+            .put("name", "reader_scan")
+            .put("description", "Search target process memory for a specific value of given type. Returns matching addresses. Optionally limit to one module.")
             .put("inputSchema", schema))
 
         return tools

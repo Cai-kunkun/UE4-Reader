@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.LinearLayout
@@ -139,9 +140,14 @@ class MainActivity : Activity() {
             Thread { listUserApps() }.start()
         }
         btnExec.setOnClickListener {
-            val target = targetProcess
-            appendLine("\\$ execute libexec.so ${target ?: "(default target)"}")
-            Thread { execRoot(binaryPath(), target?.let { arrayOf(it) } ?: emptyArray()) }.start()
+            if (!Settings.canDrawOverlays(this)) {
+                Toast.makeText(this, "请授予悬浮窗权限", Toast.LENGTH_LONG).show()
+                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
+                return@setOnClickListener
+            }
+            TargetHolder.target = targetProcess
+            startService(Intent(this, FloatingWindow::class.java))
+            appendLine("\\$ floating window opened")
         }
         btnMcpStart.setOnClickListener {
             if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 25500)
@@ -220,6 +226,7 @@ class MainActivity : Activity() {
             .setItems(labels) { _, which ->
                 if (which == 0) return@setItems
                 targetProcess = items[which - 1].second
+                TargetHolder.target = targetProcess
                 appendLine("[target set -> $targetProcess]")
                 Toast.makeText(this, "Target selected", Toast.LENGTH_SHORT).show()
             }.show()
