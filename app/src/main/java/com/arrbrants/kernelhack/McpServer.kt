@@ -131,7 +131,7 @@ class McpServer(
                 .put("serverInfo", JSONObject().put("name", "KernelHack MCP").put("version", "0.1.0")))
             "notifications/initialized" -> JSONObject()
             "ping" -> result(id, JSONObject())
-            "tools/list" -> result(id, JSONObject().put("tools", JSONArray().put(toolDefinition())))
+            "tools/list" -> result(id, JSONObject().put("tools", toolDefinition()))
             "tools/call" -> callTool(request, id)
             else -> error(id, -32601, "Method not found: $method")
         }
@@ -139,20 +139,44 @@ class McpServer(
 
     private fun callTool(request: JSONObject, id: Any?): JSONObject {
         val params = request.optJSONObject("params") ?: JSONObject()
-        if (params.optString("name") != "run_ue4_reader") {
-            return error(id, -32602, "Unknown tool")
-        }
+        val name = params.optString("name")
         val args = params.optJSONObject("arguments") ?: JSONObject()
-        val target = args.optString("package")?.trim().orEmpty()
-        if (!target.matches(Regex("[A-Za-z0-9_.]+"))) {
+
+        val pkg = args.optString("package")?.trim().orEmpty()
+        if (!pkg.matches(Regex("[A-Za-z0-9_.]+"))) {
             return error(id, -32602, "package must be an Android package name")
         }
-        val command = args.optString("command", "info")
-        val module = args.optString("module", "")
-        val address = args.optString("address", "")
-        val size = args.optInt("size", 0)
-        
-        val execArgs = buildArgs(target, command, module, address, size)
+
+        val execArgs = when (name) {
+            "reader_info" -> pkg
+            "reader_modules" -> "$pkg modules"
+            "reader_module" -> {
+                val mod = args.optString("module")?.trim().orEmpty()
+                if (!mod.matches(Regex("[A-Za-z0-9_.:+\\-]+")))
+                    return error(id, -32602, "invalid module name")
+                "$pkg module $mod"
+            }
+            "reader_read" -> {
+                val addr = args.optString("address")?.trim().orEmpty()
+                val size = args.optInt("size", 16)
+                if (!addr.matches(Regex("[0-9a-fA-F]+")) || addr.isEmpty())
+                    return error(id, -32602, "address must be a hex string")
+                if (size < 1 || size > 4096)
+                    return error(id, -32602, "size must be 1..4096")
+                "$pkg read ${addr.lowercase()} $size"
+            }
+            "writer_write" -> {
+                val addr = args.optString("address")?.trim().orEmpty()
+                val data = args.optString("hexdata")?.trim().orEmpty()
+                if (!addr.matches(Regex("[0-9a-fA-F]+")) || addr.isEmpty())
+                    return error(id, -32602, "address must be a hex string")
+                if (!data.matches(Regex("[0-9a-fA-F]+")) || data.isEmpty() || data.length % 2 != 0 || data.length > 8192)
+                    return error(id, -32602, "hexdata must be even-length hex string (max 4096 bytes)")
+                "$pkg write ${addr.lowercase()} ${data.lowercase()}"
+            }
+            else -> return error(id, -32602, "Unknown tool: $name")
+        }
+
         val result = executor(execArgs)
         val text = buildString {
             append("exitCode: ").append(result.exitCode).append('\n')
@@ -180,24 +204,64 @@ class McpServer(
         return sb.toString()
     }
 
-    private fun toolDefinition(): JSONObject {
-        val props = JSONObject()
-        props.put("package", JSONObject().put("type", "string").put("description", "Target Android package name"))
-        props.put("command", JSONObject()
-            .put("type", "string")
-            .put("description", "Command: info (default), modules, module, read")
-            .put("enum", JSONArray().put("info").put("modules").put("module").put("read")))
-        props.put("module", JSONObject().put("type", "string").put("description", "Module name for 'module' command"))
-        props.put("address", JSONObject().put("type", "string").put("description", "Hex address for 'read' command"))
-        props.put("size", JSONObject().put("type", "integer").put("description", "Size in bytes for 'read' command"))
+    private fun strProp(desc: String): JSONObject =
+        JSONObject().put("type", "string").put("description", desc)
 
-        return JSONObject()
-            .put("name", "run_ue4_reader")
-            .put("description", "Run the packaged KernelHack ELF as root for one selected Android package and return its output.")
-            .put("inputSchema", JSONObject()
-                .put("type", "object")
-                .put("properties", props)
-                .put("required", JSONArray().put("package")))
+    private fun toolDefinition(): JSONArray {
+        val tools = JSONArray()
+
+        fun base(vararg required: String): JSONObject {
+            val props = JSONObject()
+            props.put("package", strProp("Target Android package name"))
+            val req = JSONArray()
+            req.put("package")
+            for (r in required) req.put(r)
+            return JSONObject().put("type", "object").put("properties", props).put("required", req)
+        }
+
+        // 1. info
+        tools.put(JSONObject()
+            .put("name", "reader_info")
+            .put("description", "Attach driver to a running app by package name. Returns PID and default libUE4.so base pointer probe.")
+            .put("inputSchema", base()))
+
+        // 2. modules
+        tools.put(JSONObject()
+            .put("name", "reader_modules")
+            .put("description", "List all loaded modules (base address + path) of the target process.")
+            .put("inputSchema", base()))
+
+        // 3. module
+        var schema = base("module")
+        schema.getJSONObject("properties").put("module", strProp("Module file name e.g. libUE4.so"))
+        tools.put(JSONObject()
+            .put("name", "reader_module")
+            .put("description", "Get base and bss addresses of one specific module in the target process.")
+            .put("inputSchema", schema))
+
+        // 4. read
+        schema = base("address")
+        schema.getJSONObject("properties").apply {
+            put("address", strProp("Hex memory address to read from (no 0x prefix)"))
+            put("size", JSONObject().put("type", "integer").put("description", "Bytes to read (1..4096)").put("minimum", 1).put("maximum", 4096))
+        }
+        tools.put(JSONObject()
+            .put("name", "reader_read")
+            .put("description", "Read raw bytes at a hex address in the target process. Returns hex dump.")
+            .put("inputSchema", schema))
+
+        // 5. write
+        schema = base("address")
+        schema.getJSONObject("properties").apply {
+            put("address", strProp("Hex memory address to write to (no 0x prefix)"))
+            put("hexdata", strProp("Raw bytes as even-length hex string, e.g. deadbeef"))
+        }
+        tools.put(JSONObject()
+            .put("name", "writer_write")
+            .put("description", "DANGEROUS: write raw bytes into target process memory. Use only when you know exactly what you are doing.")
+            .put("inputSchema", schema))
+
+        return tools
     }
 
     private fun result(id: Any?, value: JSONObject): JSONObject = JSONObject().put("jsonrpc", "2.0").put("id", id).put("result", value)

@@ -71,7 +71,8 @@ static void print_usage() {
         "  info                 默认。打印 PID、libUE4.so 基址及基址处指针 (default)\n"
         "  modules              列出目标进程加载的所有模块 (list loaded modules)\n"
         "  module <name>        打印指定模块的 base/bss (module base + bss)\n"
-        "  read <hexaddr> <size> 读取指定地址的原始字节，以十六进制打印 (raw memory read)\n");
+        "  read <hexaddr> <size> 读取指定地址的原始字节，以十六进制打印 (raw memory read)\n"
+        "  write <hexaddr> <hexdata> 向指定地址写入原始字节 (raw memory write)\n");
 }
 
 int main(int argc, char const *argv[]) {
@@ -146,6 +147,36 @@ int main(int argc, char const *argv[]) {
             printf("%02x", buf[i]);
         }
         printf("\n");
+        return ok ? 0 : 1;
+    }
+
+    if (strcmp(command, "write") == 0) {
+        if (argc < 5) {
+            fprintf(stderr, "usage: KernelHack <package> write <hexaddr> <hexdata>\n");
+            return 1;
+        }
+        uintptr_t addr = strtoull(argv[3], nullptr, 16);
+        const char *hexdata = argv[4];
+        size_t hexlen = strlen(hexdata);
+        if (hexlen == 0 || (hexlen % 2) != 0 || hexlen > 8192) {
+            fprintf(stderr, "hexdata must be non-empty, even-length hex string (max 4096 bytes)\n");
+            return 1;
+        }
+        std::vector<uint8_t> buf(hexlen / 2);
+        for (size_t i = 0; i < buf.size(); i++) {
+            char byte[3] = {hexdata[i*2], hexdata[i*2+1], 0};
+            char *end = nullptr;
+            buf[i] = (uint8_t)strtoul(byte, &end, 16);
+            if (end != byte + 2) {
+                fprintf(stderr, "invalid hex at offset %zu\n", i);
+                return 1;
+            }
+        }
+        bool ok = driver.write(addr, buf.data(), buf.size());
+        printf("pid: %d\n", target_pid);
+        printf("addr: %lx\n", addr);
+        printf("wrote: %zu\n", buf.size());
+        printf("ok: %s\n", ok ? "true" : "false");
         return ok ? 0 : 1;
     }
 
