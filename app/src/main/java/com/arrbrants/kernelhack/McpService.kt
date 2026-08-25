@@ -29,8 +29,11 @@ class McpService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun runReader(target: String): ExecResult {
-        val process = ProcessBuilder("su", "-c", "${shellQuote(applicationInfo.nativeLibraryDir + "/libexec.so")} ${shellQuote(target)}").start()
+    private fun runReader(argsLine: String): ExecResult {
+        // argsLine 已由 McpServer.buildArgs 拼好："pkg [command] [args...]"
+        // 逐段 shellQuote，避免整串被当成单个参数
+        val quoted = argsLine.split(' ').filter { it.isNotEmpty() }.joinToString(" ") { shellQuote(it) }
+        val process = ProcessBuilder("su", "-c", "${shellQuote(applicationInfo.nativeLibraryDir + "/libexec.so")} $quoted").start()
         process.outputStream.close()
         val stdout = process.inputStream.bufferedReader().readText()
         val stderr = process.errorStream.bufferedReader().readText()
