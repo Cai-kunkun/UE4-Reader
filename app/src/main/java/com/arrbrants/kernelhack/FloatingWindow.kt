@@ -39,7 +39,7 @@ class FloatingWindow : Service() {
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,  // 可聚焦: 输入框能弹键盘; 拖动用手动 touch 拦截不受影响
             PixelFormat.TRANSLUCENT
         )
         params.gravity = Gravity.TOP or Gravity.START
@@ -79,9 +79,10 @@ class FloatingWindow : Service() {
         titleRow.addView(title); titleRow.addView(btnClose)
         panel.addView(titleRow)
 
-        // 进程选择按钮
+        // 进程选择按钮（选择后显示 "pid package"）
         val btnPick = Button(ctx).apply {
             text = "选择进程 (Select Process)"
+            tag = "btnPick"
             setOnClickListener {
                 Thread { listUserProcessesForOverlay() }.start()
             }
@@ -140,6 +141,14 @@ class FloatingWindow : Service() {
             val type = spinner.selectedItem as String
             val value = valueEdit.text.toString().trim()
             if (value.isEmpty()) { toast("请输入值"); return@setOnClickListener }
+            // 按类型校验输入合法性
+            val err = validateValue(type, value)
+            if (err != null) { toast(err); return@setOnClickListener }
+            // module 名合法性（可选填）
+            if (mod.isNotEmpty() && !Regex("^[A-Za-z0-9_.:+\\-]+$").matches(mod)) {
+                toast("module 名称不合法")
+                return@setOnClickListener
+            }
             appendResult(resultView, "\$ scan $type $value ${if (mod.isNotEmpty()) "[$mod]" else ""}\n")
             Thread {
                 val argsLine = if (mod.isNotEmpty()) "$pkg scan $type $value $mod" else "$pkg scan $type $value"
@@ -190,7 +199,9 @@ class FloatingWindow : Service() {
                     target = pkgs[i]
                     toast("target: ${pkgs[i]}")
                     panel.removeView(picker)
-                    // 更新标题
+                    // 按钮显示 "pid package"，标题同步
+                    val display = displays[i]
+                    panel.findViewWithTag<Button>("btnPick")?.text = display
                     panel.findViewWithTag<TextView>("title")?.text = "KernelHack · ${pkgs[i]}"
                 }
             }
@@ -202,6 +213,46 @@ class FloatingWindow : Service() {
     }
 
     private fun getTitleView(v: View): TextView? = v.findViewWithTag("title")
+
+    // ---- 类型校验 ----
+    private fun validateValue(type: String, v: String): String? {
+        return try {
+            when (type) {
+                "float" -> {
+                    v.toFloat()
+                    if (!Regex("^[-+]?[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?$").matches(v))
+                        "float 格式不合法: $v"
+                    else null
+                }
+                "double" -> {
+                    v.toDouble()
+                    if (!Regex("^[-+]?[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?$").matches(v))
+                        "double 格式不合法: $v"
+                    else null
+                }
+                "int" -> {
+                    v.toInt()
+                    null
+                }
+                "long" -> {
+                    v.toLong()
+                    null
+                }
+                "short" -> {
+                    val n = v.toShort()
+                    null
+                }
+                "byte" -> {
+                    val n = v.toInt()
+                    if (n < 0 || n > 255) "byte 范围 0..255"
+                    else null
+                }
+                else -> "未知类型"
+            }
+        } catch (e: NumberFormatException) {
+            "$type 无法解析: $v"
+        }
+    }
 
     // ---- 执行 ----
     private fun runCapture(cmd: String): String {
