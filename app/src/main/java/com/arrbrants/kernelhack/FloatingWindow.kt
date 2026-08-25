@@ -27,6 +27,8 @@ class FloatingWindow : Service() {
     private var miniIcon: View? = null      // 最小化小图标
     private var params: WindowManager.LayoutParams? = null
     private lateinit var prefs: SharedPreferences
+    private var iconMoved = false
+    private val iconTouchStart = android.graphics.Point()
     private val types = arrayOf("float", "double", "int", "long", "short", "byte")
 
     // 当前选中的目标（与主界面共享 targetProcess）
@@ -40,7 +42,7 @@ class FloatingWindow : Service() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         prefs = getSharedPreferences("floating_window", MODE_PRIVATE)
-        panel = buildUi()
+        panel = buildUi()   // FrameLayout{ ScrollView{content}, resizeHandle }
 
         val savedW = prefs.getInt("width", dp(280))
         val savedH = prefs.getInt("height", dp(360))
@@ -56,7 +58,6 @@ class FloatingWindow : Service() {
         root = panel
         windowManager?.addView(root, params!!)
         enableDrag(params!!)
-        enableResize(panel!!, params!!)
     }
 
     private fun attachView(v: View) {
@@ -68,15 +69,19 @@ class FloatingWindow : Service() {
 
     private fun minimize() {
         if (miniIcon == null) buildMiniIcon()
-        params?.width = WindowManager.LayoutParams.WRAP_CONTENT
-        params?.height = WindowManager.LayoutParams.WRAP_CONTENT
+        params?.width = dp(40)
+        params?.height = dp(40)
+        params?.x = prefs.getInt("mini_x", params?.x ?: dp(40))
+        params?.y = prefs.getInt("mini_y", params?.y ?: dp(120))
+        iconMoved = false
         attachView(miniIcon!!)
     }
 
     private fun expand() {
-        params?.width = prefs.getInt("width", dp(280))
-        params?.height = prefs.getInt("height", dp(360))
+        params?.width = prefs.getInt("width", dp(260))
+        params?.height = prefs.getInt("height", dp(340))
         attachView(panel!!)
+        iconMoved = false
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -91,11 +96,26 @@ class FloatingWindow : Service() {
 
     private fun buildUi(): View {
         val ctx = this
-        val panel = LinearLayout(ctx).apply {
+
+        // 内容面板（竖排控件）
+        val content = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.argb(235, 25, 28, 32))
             setPadding(dp(14), dp(10), dp(14), dp(14))
         }
+
+        // 整体外壳: FrameLayout 让 resize 手柄可以钉在右下角
+        val frame = android.widget.FrameLayout(ctx).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+        val scroll = ScrollView(ctx).apply {
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT)
+        }
+        frame.addView(scroll)
+
+        val panel = content  // 后续代码仍引用 content 作为控件父容器
 
         // 标题栏（拖动手柄 + 最小化 + 关闭）
         val titleRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
@@ -158,9 +178,9 @@ class FloatingWindow : Service() {
         val btnScan = Button(ctx).apply { text = "🔍 Scan" }
         panel.addView(btnScan)
 
-        // 结果区
+        // 结果区（高度自适应，整体滚动由外层 ScrollView 处理）
         val resultScroll = ScrollView(ctx).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(120))
             setBackgroundColor(Color.BLACK)
         }
         val resultView = TextView(ctx).apply {
@@ -199,7 +219,12 @@ class FloatingWindow : Service() {
             }.start()
         }
 
-        return panel
+        scroll.addView(panel)
+
+        // 右下角 resize 手柄（钉在外层 FrameLayout 上，滚动不影响位置）
+        addResizeHandle(frame, content)
+
+        return frame
     }
 
     // ---- 业务逻辑：列出用户进程并弹出选择对话框（在 overlay 上）----
@@ -328,63 +353,75 @@ class FloatingWindow : Service() {
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     private fun runOnUiThread(f: () -> Unit) { android.os.Handler(mainLooper).post(f) }
 
-    // ---- 最小化小图标 (app 默认图标) ----
+    // ---- 最小化小图标 (app 图标, 固定小尺寸, 区分点击与拖动) ----
     private fun buildMiniIcon() {
-        val ctx = this
-        val iv = android.widget.ImageView(ctx).apply {
+        val size = dp(40)
+        val iv = android.widget.ImageView(this).apply {
             setImageResource(R.mipmap.ic_launcher)
             setBackgroundResource(android.R.drawable.dialog_frame)
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-            alpha = 0.9f
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            layoutParams = WindowManager.LayoutParams(size, size)
+            alpha = 0.85f
         }
-        // 单击展开 / 长按也展开; 拖动由 enableDrag 统一处理
-        iv.setOnClickListener { expand() }
+        iv.setOnTouchListener { v, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    iconTouchStart.set(e.rawX.toInt(), e.rawY.toInt())
+                    iconMoved = false
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    // 未发生明显移动才算点击展开
+                    if (!iconMoved) expand()
+                    prefs.edit()
+                        .putInt("mini_x", params?.x ?: dp(40))
+                        .putInt("mini_y", params?.y ?: dp(120))
+                        .apply()
+                    true
+                }
+                else -> false
+            }
+        }
         miniIcon = iv
     }
 
-    // ---- 右下角拖拽调整大小 ----
-    private fun enableResize(targetView: View, params: WindowManager.LayoutParams) {
+    // ---- resize 手柄: 钉在 FrameLayout 右下角, 不随内容滚动 ----
+    private fun addResizeHandle(frame: android.widget.FrameLayout, contentView: View) {
         val handle = android.widget.TextView(this).apply {
             text = "◢"
-            setTextColor(Color.argb(180, 200, 200, 210))
+            setTextColor(Color.argb(200, 200, 200, 210))
             textSize = 14f
-            setPadding(dp(2), dp(2), dp(2), dp(2))
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.END)
         }
-        val lp = android.widget.FrameLayout.LayoutParams(
-            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
-            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM or Gravity.END
-        )
-        (targetView as? android.view.ViewGroup)?.let { vg ->
-            // 用 FrameLayout 包裹才能右下角定位 handle —— 简化: 直接 addView 到 LinearLayout 底部行
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
-            row.addView(handle)
-            vg.addView(row)
-            var downX = 0f; var downY = 0f; var startW = 0; var startH = 0
-            handle.setOnTouchListener { _, e ->
-                when (e.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        downX = e.rawX; downY = e.rawY
-                        startW = params.width.coerceAtLeast(1)
-                        startH = params.height.coerceAtLeast(1)
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val w = (startW + (e.rawX - downX)).toInt()
-                            .coerceIn(dp(220), resources.displayMetrics.widthPixels)
-                        val h = (startH + (e.rawY - downY)).toInt()
-                            .coerceIn(dp(240), resources.displayMetrics.heightPixels)
-                        params.width = w; params.height = h
-                        windowManager?.updateViewLayout(targetView, params)
-                        true
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        // 持久化尺寸
-                        prefs.edit().putInt("width", params.width).putInt("height", params.height).apply()
-                        true
-                    }
-                    else -> false
+        frame.addView(handle)
+
+        var downX = 0f; var downY = 0f; var startW = 0; var startH = 0
+        handle.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = e.rawX; downY = e.rawY
+                    startW = params?.width?.coerceAtLeast(1) ?: dp(280)
+                    startH = params?.height?.coerceAtLeast(1) ?: dp(360)
+                    true
                 }
+                MotionEvent.ACTION_MOVE -> {
+                    val dm = resources.displayMetrics
+                    params?.let {
+                        it.width = (startW + (e.rawX - downX)).toInt().coerceIn(dp(220), dm.widthPixels)
+                        it.height = (startH + (e.rawY - downY)).toInt().coerceIn(dp(240), dm.heightPixels)
+                        windowManager?.updateViewLayout(frame, it)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    params?.let { prefs.edit().putInt("width", it.width).putInt("height", it.height).apply() }
+                    true
+                }
+                else -> false
             }
         }
     }
@@ -395,15 +432,24 @@ class FloatingWindow : Service() {
         var downX = 0f; var downY = 0f; var startX = 0; var startY = 0
         view.setOnTouchListener { v, e ->
             when (e.action) {
-                MotionEvent.ACTION_DOWN -> { downX = e.rawX; downY = e.rawY; startX = params.x; startY = params.y; false }
+                MotionEvent.ACTION_DOWN -> {
+                    downX = e.rawX; downY = e.rawY; startX = params.x; startY = params.y
+                    if (v === miniIcon) iconTouchStart.set(e.rawX.toInt(), e.rawY.toInt())
+                    false
+                }
                 MotionEvent.ACTION_MOVE -> {
                     params.x = startX + (e.rawX - downX).toInt()
                     params.y = startY + (e.rawY - downY).toInt()
+                    if (v === miniIcon && (Math.abs(e.rawX - iconTouchStart.x) > dp(8) || Math.abs(e.rawY - iconTouchStart.y) > dp(8)))
+                        iconMoved = true
                     windowManager?.updateViewLayout(v, params)
                     false
                 }
                 MotionEvent.ACTION_UP -> {
-                    prefs.edit().putInt("x", params.x).putInt("y", params.y).apply()
+                    prefs.edit()
+                        .putInt(if (v === miniIcon) "mini_x" else "x", params.x)
+                        .putInt(if (v === miniIcon) "mini_y" else "y", params.y)
+                        .apply()
                     false
                 }
                 else -> false
