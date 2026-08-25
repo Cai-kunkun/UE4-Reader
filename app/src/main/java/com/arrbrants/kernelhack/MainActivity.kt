@@ -1,8 +1,10 @@
 package com.arrbrants.kernelhack
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
@@ -76,6 +78,16 @@ class MainActivity : Activity() {
         val btnExec = actionButton("Execute target", true).apply { icon = null }
         content.addView(btnExec, LinearLayout.LayoutParams(-1, dp(56)).apply { bottomMargin = dp(16) })
 
+        val mcpRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val btnMcpStart = actionButton("Start MCP :25500", true)
+        val btnMcpStop = actionButton("Stop MCP", false)
+        mcpRow.addView(btnMcpStart, LinearLayout.LayoutParams(0, dp(56), 1.4f).apply { rightMargin = dp(8) })
+        mcpRow.addView(btnMcpStop, LinearLayout.LayoutParams(0, dp(56), 1f))
+        content.addView(mcpRow, LinearLayout.LayoutParams(-1, dp(64)).apply { bottomMargin = dp(16) })
+
         val consoleCard = MaterialCardView(this).apply {
             radius = dp(20).toFloat()
             setCardBackgroundColor(Color.rgb(20, 22, 25))
@@ -131,6 +143,15 @@ class MainActivity : Activity() {
             appendLine("\\$ execute libexec.so ${target ?: "(default target)"}")
             Thread { execRoot(binaryPath(), target?.let { arrayOf(it) } ?: emptyArray()) }.start()
         }
+        btnMcpStart.setOnClickListener {
+            if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 25500)
+            startForegroundService(Intent(this, McpService::class.java))
+            appendLine("[MCP listening on 127.0.0.1:${McpServer.PORT}/mcp]")
+        }
+        btnMcpStop.setOnClickListener {
+            stopService(Intent(this, McpService::class.java))
+            appendLine("[MCP stopped]")
+        }
         run.setOnClickListener {
             val cmd = input.text?.toString()?.trim().orEmpty()
             if (cmd.isEmpty()) return@setOnClickListener
@@ -142,6 +163,12 @@ class MainActivity : Activity() {
             val ok = checkSu()
             runOnUiThread { status.text = if (ok) "Root access available" else "Root access unavailable" }
         }.start()
+        McpLog.listener = { appendLine("[$it]") }
+    }
+
+    override fun onDestroy() {
+        McpLog.listener = null
+        super.onDestroy()
     }
 
     private fun actionButton(label: String, filled: Boolean): MaterialButton = MaterialButton(this).apply {
